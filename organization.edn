@@ -1,3 +1,13 @@
 ;; Real-world organization location / contact.
 ;; :head-role is institutional title only — no personal names.
-{:contact-page "https://www.mof.go.jp/", :ooyake-id "gov.jpn.mof", :sourced-from "com-etzhayyim-ooyake gov-units (verbatim where present)", :head-role-note "institutional office title only; personal names of current office-holders are intentionally NOT stored", :official-url "https://www.mof.go.jp/", :head-role "財務大臣", :hq {:last-verified "2026-06-02", :phone "03-3581-4111", :line-en "3-1-1 Kasumigaseki, Chiyoda-ku, Tokyo", :line-local "東京都千代田区霞が関3-1-1", :postal-code "100-8940", :kind "headquarters", :provenance "https://www.mof.go.jp/", :hours "平日 9:30-18:15 (土日祝休)", :sourcing "representative", :country "jpn"}, :wikidata "Q1322605", :name-en "Ministry of Finance", :name-local "財務省"}
+{:ooyake-id "gov.jpn.mof"
+  :official-url "https://www.mof.go.jp/"
+  :name-en "Ministry of Finance"
+  :name-local "財務省"
+  :wikidata "Q1322605"
+  :head-role "財務大臣"
+  :head-role-note "institutional office title only; personal names of current office-holders are intentionally NOT stored"
+  :contact-page "https://www.mof.go.jp/"
+  :sourced-from "com-etzhayyim-ooyake gov-units (verbatim where present)"
+  :hq {:postal-code "100-8940" :line-local "東京都千代田区霞が関3-1-1" :line-en "3-1-1 Kasumigaseki, Chiyoda-ku, Tokyo" :country "jpn" :phone "03-3581-4111" :hours "平日 9:30-18:15 (土日祝休)" :kind "headquarters" :provenance "https://www.mof.go.jp/" :last-verified "2026-06-02" :sourcing "representative"}
+}
