@@ -1,0 +1,350 @@
+(ns mofcompliance.store
+  "SSoT for the JPN-MOF (Ministry of Finance) compliance actor, behind a
+  `Store` protocol so the backend is a swap, not a rewrite -- the same
+  seam every prior cloud-itonami actor in this fleet uses.
+
+    - `MemStore`     -- atom of EDN. The deterministic default for
+                        dev/tests/demo (no deps).
+    - `DatomicStore` -- backed by `langchain.db`, a Datomic-API-compatible
+                        EAV store, using `langchain-store.core` for BOTH
+                        the entity field-spec (`map->tx`/`pull->map`/
+                        `pull-pattern`) AND the shared EDN-blob codec +
+                        identity schema + event-log helpers, instead of
+                        a hand-rolled `enc`/`dec*` (ADR-2607141600).
+
+  Both implement the same protocol and pass the same contract
+  (test/mofcompliance/store_contract_test.clj).
+
+  The primary entity here is an `engagement` -- one operator's
+  compliance engagement, carrying:
+
+    - the engagement-level unconditional gates:
+      `:unified-qualification-verified?` (全省庁統一資格, grounded in
+      `mofcompliance.facts`' `:unified-qualification` entry) and
+      `:tender-method-classified?` (会計法/予算決算及び会計令
+      tender-method classification, grounded in the `:tender-method`
+      entry) -- BOTH required before any `:filing/submit`, regardless
+      of whether the engagement involves foreign investment or
+      cross-border goods.
+    - the CONDITIONAL gates: `:requires-fefta-screening?` /
+      `:fefta-screening-verified?` (only applies to foreign-investor
+      engagements in a designated/core sector, grounded in
+      `:fefta-notification`) and `:requires-customs-clearance?` /
+      `:customs-clearance-verified?` (only applies when the engagement
+      involves cross-border goods, grounded in `:customs-declaration`)
+      -- each a no-op gate when the engagement's own `:requires-*` flag
+      is false.
+    - the single actionable filing track's actuation state:
+      `:drafted?`/`:draft-number`/`:submitted?`/`:submit-number` for
+      `mofcompliance.registry/compliance-track`
+      (`:compliance-package`) -- unlike sibling actors with multiple
+      independent regulatory filing tracks, this actor manages exactly
+      ONE package (see `mofcompliance.registry` docstring), so no
+      per-track field-name indirection is needed.
+
+  `:compliance/assess` proposals are stored per underlying regulatory
+  catalog track (`:unified-qualification`/`:tender-method`/
+  `:fefta-notification`/`:customs-declaration`/
+  `:corporate-number-boundary`) via `assessment-of`, keyed
+  [engagement-id catalog-track] -- these feed
+  `mofcompliance.governor`'s evidence-incomplete check across the
+  engagement's applicable tracks before the compliance-package
+  filing/draft or filing/submit may proceed.
+
+  The ledger stays append-only on every backend."
+  (:require [mofcompliance.registry :as registry]
+            [langchain.db :as d]
+            [langchain-store.core :as ls]))
+
+(defprotocol Store
+  (engagement [s id])
+  (all-engagements [s])
+  (assessment-of [s engagement-id track] "committed track assessment, or nil")
+  (ledger [s])
+  (draft-history [s] "the append-only filing-draft history")
+  (submit-history [s] "the append-only filing-submit history")
+  (next-draft-sequence [s track])
+  (next-submit-sequence [s track])
+  (engagement-drafted? [s engagement-id])
+  (engagement-submitted? [s engagement-id])
+  (commit-record! [s record] "apply a committed op's record to the SSoT")
+  (append-ledger! [s fact]   "append one immutable decision fact")
+  (with-engagements [s engagements] "replace/seed the engagement directory"))
+
+;; ----------------------------- demo data -----------------------------
+
+(defn demo-data
+  "A small, self-contained engagement set covering the happy path
+  (draft, submit) plus the governor's own dossier-grounded checks: a
+  clean case (eng-1, includes the compliance-audit export package
+  revenue line), an unregistered-track fabrication-defense +
+  corporate-number-misattribution-defense case (eng-2), a fee-mismatch
+  case (eng-3), a missing-unified-qualification case (eng-4), a
+  missing-tender-method-classification case (eng-5), a foreign-investor
+  engagement missing FEFTA screening (eng-6), and a cross-border-goods
+  engagement missing customs clearance (eng-7)."
+  []
+  {:engagements
+   {"eng-1" {:id "eng-1" :operator "Kita Procurement Advisory KK" :portal "MOF procurement portal (調達ポータル) / p-portal.go.jp"
+             :base-fee 800000 :monthly-rate 50000 :monitoring-months 12
+             :audit-export? true :export-fee 150000 :claimed-fee 1550000.0
+             :unified-qualification-verified? true
+             :tender-method-classified? true
+             :foreign-investor? false
+             :requires-fefta-screening? false :fefta-screening-verified? false
+             :requires-customs-clearance? false :customs-clearance-verified? false
+             :drafted? false :submitted? false
+             :status :intake}
+    "eng-2" {:id "eng-2" :operator "Atlantis Trading Partners LLC" :portal "MOF procurement portal (調達ポータル) / p-portal.go.jp"
+             :base-fee 800000 :monthly-rate 50000 :monitoring-months 12
+             :audit-export? true :export-fee 150000 :claimed-fee 1550000.0
+             :unified-qualification-verified? true
+             :tender-method-classified? true
+             :foreign-investor? true
+             :requires-fefta-screening? false :fefta-screening-verified? false
+             :requires-customs-clearance? false :customs-clearance-verified? false
+             :drafted? false :submitted? false
+             :status :intake}
+    "eng-3" {:id "eng-3" :operator "Minami Import Systems KK" :portal "MOF procurement portal (調達ポータル) / p-portal.go.jp"
+             :base-fee 800000 :monthly-rate 50000 :monitoring-months 12
+             :audit-export? false :export-fee nil :claimed-fee 1800000.0
+             :unified-qualification-verified? true
+             :tender-method-classified? true
+             :foreign-investor? false
+             :requires-fefta-screening? false :fefta-screening-verified? false
+             :requires-customs-clearance? false :customs-clearance-verified? false
+             :drafted? false :submitted? false
+             :status :intake}
+    "eng-4" {:id "eng-4" :operator "Higashi Public Sector Vendors KK" :portal "MOF procurement portal (調達ポータル) / p-portal.go.jp"
+             :base-fee 800000 :monthly-rate 50000 :monitoring-months 12
+             :audit-export? false :export-fee nil :claimed-fee 1400000.0
+             :unified-qualification-verified? false
+             :tender-method-classified? true
+             :foreign-investor? false
+             :requires-fefta-screening? false :fefta-screening-verified? false
+             :requires-customs-clearance? false :customs-clearance-verified? false
+             :drafted? false :submitted? false
+             :status :intake}
+    "eng-5" {:id "eng-5" :operator "Nishi Logistics Consulting KK" :portal "MOF procurement portal (調達ポータル) / p-portal.go.jp"
+             :base-fee 800000 :monthly-rate 50000 :monitoring-months 12
+             :audit-export? false :export-fee nil :claimed-fee 1400000.0
+             :unified-qualification-verified? true
+             :tender-method-classified? false
+             :foreign-investor? false
+             :requires-fefta-screening? false :fefta-screening-verified? false
+             :requires-customs-clearance? false :customs-clearance-verified? false
+             :drafted? false :submitted? false
+             :status :intake}
+    "eng-6" {:id "eng-6" :operator "Chuo Cross-Border Capital KK" :portal "MOF procurement portal (調達ポータル) / p-portal.go.jp"
+             :base-fee 800000 :monthly-rate 50000 :monitoring-months 12
+             :audit-export? false :export-fee nil :claimed-fee 1400000.0
+             :unified-qualification-verified? true
+             :tender-method-classified? true
+             :foreign-investor? true
+             :requires-fefta-screening? true :fefta-screening-verified? false
+             :requires-customs-clearance? false :customs-clearance-verified? false
+             :drafted? false :submitted? false
+             :status :intake}
+    "eng-7" {:id "eng-7" :operator "Minato Equipment Import KK" :portal "MOF procurement portal (調達ポータル) / p-portal.go.jp"
+             :base-fee 800000 :monthly-rate 50000 :monitoring-months 12
+             :audit-export? false :export-fee nil :claimed-fee 1400000.0
+             :unified-qualification-verified? true
+             :tender-method-classified? true
+             :foreign-investor? false
+             :requires-fefta-screening? false :fefta-screening-verified? false
+             :requires-customs-clearance? true :customs-clearance-verified? false
+             :drafted? false :submitted? false
+             :status :intake}}})
+
+;; ----------------------------- shared commit logic -----------------------------
+;; Both backends' `commit-record!` build the draft/submit record the
+;; same way -- these two pure helpers are the shared step, mirroring
+;; every sibling actor's `draft-filing!`/`submit-filing!` shape.
+
+(defn- do-draft! [engagement-id track seq-n]
+  (registry/register-draft engagement-id track seq-n))
+
+(defn- do-submit! [engagement-id track seq-n]
+  (registry/register-submit engagement-id track seq-n))
+
+;; ----------------------------- MemStore (default) -----------------------------
+
+(defrecord MemStore [a]
+  Store
+  (engagement [_ id] (get-in @a [:engagements id]))
+  (all-engagements [_] (sort-by :id (vals (:engagements @a))))
+  (assessment-of [_ engagement-id track] (get-in @a [:assessments engagement-id track]))
+  (ledger [_] (:ledger @a))
+  (draft-history [_] (:draft-records @a))
+  (submit-history [_] (:submit-records @a))
+  (next-draft-sequence [_ track] (get-in @a [:draft-sequences track] 0))
+  (next-submit-sequence [_ track] (get-in @a [:submit-sequences track] 0))
+  (engagement-drafted? [_ engagement-id]
+    (boolean (get-in @a [:engagements engagement-id :drafted?])))
+  (engagement-submitted? [_ engagement-id]
+    (boolean (get-in @a [:engagements engagement-id :submitted?])))
+  (commit-record! [s {:keys [effect path value payload]}]
+    (case effect
+      :engagement/upsert
+      (swap! a update-in [:engagements (:id value)] merge value)
+
+      :assessment/set
+      (let [[engagement-id track] path]
+        (swap! a assoc-in [:assessments engagement-id track] payload))
+
+      :engagement/mark-drafted
+      (let [[engagement-id track] path
+            seq-n (next-draft-sequence s track)
+            result (do-draft! engagement-id track seq-n)]
+        (swap! a (fn [state]
+                   (-> state
+                       (update-in [:draft-sequences track] (fnil inc 0))
+                       (update-in [:engagements engagement-id] merge
+                                  {:drafted? true :draft-number (get result "draft_number")})
+                       (update :draft-records registry/append result))))
+        result)
+
+      :engagement/mark-submitted
+      (let [[engagement-id track] path
+            seq-n (next-submit-sequence s track)
+            result (do-submit! engagement-id track seq-n)]
+        (swap! a (fn [state]
+                   (-> state
+                       (update-in [:submit-sequences track] (fnil inc 0))
+                       (update-in [:engagements engagement-id] merge
+                                  {:submitted? true :submit-number (get result "submit_number")})
+                       (update :submit-records registry/append result))))
+        result)
+      nil)
+    s)
+  (append-ledger! [_ fact] (swap! a update :ledger conj fact) fact)
+  (with-engagements [s engagements] (when (seq engagements) (swap! a assoc :engagements engagements)) s))
+
+(defn seed-db
+  "A MemStore seeded with the demo engagement set."
+  []
+  (->MemStore (atom (assoc (demo-data)
+                           :assessments {}
+                           :ledger [] :draft-sequences {} :draft-records []
+                           :submit-sequences {} :submit-records []))))
+
+;; ----------------------------- DatomicStore (langchain.db) -----------------------------
+
+;; Entity field-spec drives map<->tx<->pull for `engagement` via
+;; `langchain-store.core` -- no hand-rolled `engagement->tx`/
+;; `pull->engagement` pair (ADR-2607141600 increment 2, `underwriting.store`
+;; reference-entity-adopter pattern). None of these fields need `:blob?`
+;; (all scalars/booleans/keywords); booleans use `:coerce boolean` so a
+;; never-set attribute reads back as `false`, matching MemStore.
+(def ^:private engagement-spec
+  {:id                              {:attr :engagement/id}
+   :operator                        {:attr :engagement/operator}
+   :portal                          {:attr :engagement/portal}
+   :base-fee                        {:attr :engagement/base-fee}
+   :monthly-rate                    {:attr :engagement/monthly-rate}
+   :monitoring-months               {:attr :engagement/monitoring-months}
+   :audit-export?                   {:attr :engagement/audit-export? :coerce boolean}
+   :export-fee                      {:attr :engagement/export-fee}
+   :claimed-fee                     {:attr :engagement/claimed-fee}
+   :unified-qualification-verified? {:attr :engagement/unified-qualification-verified? :coerce boolean}
+   :tender-method-classified?       {:attr :engagement/tender-method-classified? :coerce boolean}
+   :foreign-investor?               {:attr :engagement/foreign-investor? :coerce boolean}
+   :requires-fefta-screening?       {:attr :engagement/requires-fefta-screening? :coerce boolean}
+   :fefta-screening-verified?       {:attr :engagement/fefta-screening-verified? :coerce boolean}
+   :requires-customs-clearance?     {:attr :engagement/requires-customs-clearance? :coerce boolean}
+   :customs-clearance-verified?     {:attr :engagement/customs-clearance-verified? :coerce boolean}
+   :drafted?                        {:attr :engagement/drafted? :coerce boolean}
+   :draft-number                    {:attr :engagement/draft-number}
+   :submitted?                      {:attr :engagement/submitted? :coerce boolean}
+   :submit-number                   {:attr :engagement/submit-number}
+   :status                          {:attr :engagement/status}})
+
+(def ^:private schema
+  (merge
+   (ls/identity-schema [:engagement/id :assessment/key :ledger/seq
+                        :draft-record/seq :submit-record/seq
+                        :draft-sequence/track :submit-sequence/track])))
+
+(defn- assessment-key [engagement-id track] (str engagement-id "::" (name track)))
+
+(defrecord DatomicStore [conn]
+  Store
+  (engagement [_ id]
+    (ls/pull->map engagement-spec :id
+                  (d/pull (d/db conn) (ls/pull-pattern engagement-spec) [:engagement/id id])))
+  (all-engagements [_]
+    (->> (d/q '[:find [?id ...] :where [?e :engagement/id ?id]] (d/db conn))
+         (map #(ls/pull->map engagement-spec :id
+                             (d/pull (d/db conn) (ls/pull-pattern engagement-spec) [:engagement/id %])))
+         (sort-by :id)))
+  (assessment-of [_ engagement-id track]
+    (ls/dec* (d/q '[:find ?p . :in $ ?k
+                   :where [?a :assessment/key ?k] [?a :assessment/payload ?p]]
+                 (d/db conn) (assessment-key engagement-id track))))
+  (ledger [_] (ls/read-stream conn :ledger/seq :ledger/fact))
+  (draft-history [_] (ls/read-stream conn :draft-record/seq :draft-record/record))
+  (submit-history [_] (ls/read-stream conn :submit-record/seq :submit-record/record))
+  (next-draft-sequence [_ track]
+    (or (d/q '[:find ?n . :in $ ?t
+              :where [?e :draft-sequence/track ?t] [?e :draft-sequence/next ?n]]
+            (d/db conn) track)
+        0))
+  (next-submit-sequence [_ track]
+    (or (d/q '[:find ?n . :in $ ?t
+              :where [?e :submit-sequence/track ?t] [?e :submit-sequence/next ?n]]
+            (d/db conn) track)
+        0))
+  (engagement-drafted? [s engagement-id]
+    (boolean (:drafted? (engagement s engagement-id))))
+  (engagement-submitted? [s engagement-id]
+    (boolean (:submitted? (engagement s engagement-id))))
+  (commit-record! [s {:keys [effect path value payload]}]
+    (case effect
+      :engagement/upsert
+      (d/transact! conn [(ls/map->tx engagement-spec value)])
+
+      :assessment/set
+      (let [[engagement-id track] path]
+        (d/transact! conn [{:assessment/key (assessment-key engagement-id track)
+                            :assessment/payload (ls/enc payload)}]))
+
+      :engagement/mark-drafted
+      (let [[engagement-id track] path
+            seq-n (next-draft-sequence s track)
+            result (do-draft! engagement-id track seq-n)
+            next-n (inc seq-n)]
+        (d/transact! conn
+                     [(ls/map->tx engagement-spec {:id engagement-id :drafted? true
+                                                   :draft-number (get result "draft_number")})
+                      {:draft-sequence/track track :draft-sequence/next next-n}
+                      {:draft-record/seq (count (draft-history s)) :draft-record/record (ls/enc (get result "record"))}])
+        result)
+
+      :engagement/mark-submitted
+      (let [[engagement-id track] path
+            seq-n (next-submit-sequence s track)
+            result (do-submit! engagement-id track seq-n)
+            next-n (inc seq-n)]
+        (d/transact! conn
+                     [(ls/map->tx engagement-spec {:id engagement-id :submitted? true
+                                                   :submit-number (get result "submit_number")})
+                      {:submit-sequence/track track :submit-sequence/next next-n}
+                      {:submit-record/seq (count (submit-history s)) :submit-record/record (ls/enc (get result "record"))}])
+        result)
+      nil)
+    s)
+  (append-ledger! [s fact]
+    (ls/append-blob! conn :ledger/seq :ledger/fact (count (ledger s)) fact)
+    fact)
+  (with-engagements [s engagements]
+    (when (seq engagements) (d/transact! conn (mapv #(ls/map->tx engagement-spec %) (vals engagements)))) s))
+
+(defn datomic-store
+  ([] (datomic-store {}))
+  ([{:keys [engagements]}]
+   (let [s (->DatomicStore (d/create-conn schema))]
+     (with-engagements s engagements))))
+
+(defn datomic-seed-db
+  []
+  (datomic-store (demo-data)))
