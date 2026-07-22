@@ -11,7 +11,7 @@ Report privately before opening public issues for:
 - credential exposure
 - real client or compliance data exposure
 - authorization bypass
-- Customs & Tax Compliance Governor bypass
+- MOF Procurement Compliance Governor bypass
 - audit-ledger tampering
 - a path that lets a filing/registration submit without human sign-off
 

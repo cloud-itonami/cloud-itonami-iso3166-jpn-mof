@@ -16,7 +16,7 @@ behavior.
 ## Rules
 
 - Do not commit real client or compliance data.
-- Keep production actions behind the Customs & Tax Compliance Governor.
+- Keep production actions behind the MOF Procurement Compliance Governor.
 - Never let the advisor state a legal/tax conclusion as fact — every
   regulatory requirement must cite the official MOF source.
 - Document any new business-model or operator assumption in `docs/`.

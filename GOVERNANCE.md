@@ -9,7 +9,7 @@ Maintainers may merge changes that preserve these invariants:
 
 - the advisor cannot directly submit a filing/registration or commit a
   public record.
-- the Customs & Tax Compliance Governor remains independent of the advisor.
+- the MOF Procurement Compliance Governor remains independent of the advisor.
 - a fabricated or stale regulatory-requirement claim cannot be overridden
   by human approval alone.
 - every commit, hold and approval path is auditable.

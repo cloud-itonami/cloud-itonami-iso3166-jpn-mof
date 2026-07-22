@@ -1,12 +1,54 @@
 {:itonami.blueprint/id "cloud-itonami-iso3166-jpn-mof"
- :itonami.blueprint/name "Independent MOF-Regulated Customs & Tax Compliance Service — Japan (MOF)"
+ :itonami.blueprint/name "Independent MOF Procurement, Foreign-Investment-Screening & Customs Compliance Service — Japan (MOF)"
  :itonami.blueprint/iso3166 "JPN-MOF"
  :itonami.blueprint/iso3166-parent "JPN"
  :itonami.blueprint/ooyake-id "gov.jpn.mof"
- :itonami.blueprint/domain :public-sector/mof-customs-tax-compliance
+ :itonami.blueprint/domain :public-sector/mof-procurement-fefta-customs-compliance
  :itonami.blueprint/license "AGPL-3.0-or-later"
- :itonami.blueprint/social-impact [:customs-clarity :tax-invoice-compliance :public-spend-transparency]
- :itonami.blueprint/governor :customs-tax-compliance-governor
+ :itonami.blueprint/social-impact [:procurement-access-clarity :foreign-investment-screening-transparency :customs-clarity :public-spend-transparency]
+ :itonami.blueprint/governor :mof-procurement-compliance-governor
  :itonami.blueprint/robotics false
  :itonami.blueprint/required-technologies [:identity :forms :dmn :bpmn :audit-ledger]
- :itonami.blueprint/status :public-oss}
+ :itonami.blueprint/status :public-oss
+ :itonami.blueprint/organization {:ooyake-id "gov.jpn.mof" :official-url "https://www.mof.go.jp/" :head-role "財務大臣" :hq-line-local "東京都千代田区霞が関3-1-1" :hq-phone "03-3581-4111" :contact-page "https://www.mof.go.jp/"}
+ :itonami.blueprint/maturity :implemented
+ :itonami.blueprint/implemented-slice
+ "src/mofcompliance/* (langgraph-clj StateGraph actor): facts.cljc
+ (全省庁統一資格 Unified Qualification + 会計法/予算決算及び会計令
+ tender-method classification + FEFTA foreign-investment-screening +
+ customs/tariff import-declaration catalog, grounded in mof.go.jp/
+ p-portal.go.jp/customs.go.jp/japaneselawtranslation.go.jp/zen-shouchou.jp
+ sources only, plus a negative/boundary
+ :corporate-number-boundary entry defending against the Corporate-
+ Number/MOJ-registration misattribution trap), governor.cljc (MOF
+ Procurement Compliance Governor -- spec-basis/no-fabrication HARD
+ check, evidence-incomplete check across applicable tracks,
+ corporate-number-misattribution HARD check, unified-qualification-
+ missing HARD check (unconditional), tender-method-undetermined HARD
+ check (unconditional), FEFTA-screening-missing HARD check
+ (conditional on :requires-fefta-screening?), customs-clearance-
+ missing HARD check (conditional on :requires-customs-clearance?),
+ engagement-fee-mismatch check (three revenue lines), confidence-
+ floor/actuation gate, double-draft/double-submit guards), store.cljc
+ (MemStore + DatomicStore via kotoba-lang/langchain-store's entity
+ field-spec map->tx/pull->map/pull-pattern AND its identity-schema/
+ event-log helpers, engagement entity tracking the engagement-level
+ unconditional/conditional gates plus the single actionable
+ :compliance-package filing track's actuation state), registry.cljc
+ (pure-function filing-draft/filing-submit record construction),
+ mofcompliancellm.cljc (mock Compliance Advisor), operation.cljc
+ (intake -> advise -> govern -> decide -> [request-approval ->]
+ commit/hold StateGraph), phase.cljc (0->3 rollout, :filing/draft and
+ :filing/submit permanently excluded from every phase's :auto set).
+ 37 tests / 124 assertions passing (governor contract + store parity
+ + facts + phase + registry), clj-kondo clean (0 errors, 0 warnings).
+ Domain reconciled against the pre-existing (2026-07-10) blueprint
+ text, which described a narrower Customs & Tax Compliance scope
+ (tariff classification + インボイス制度 Qualified Invoice Issuer
+ registration) -- the verified research dossier for this
+ implementation pass instead covered procurement compliance +
+ FEFTA + customs (customs genuinely overlaps with/subsumes the
+ original tariff-classification theme); the implemented scope
+ followed the dossier rather than inventing インボイス制度 specifics
+ with no verified sourcing -- see docs/business-model.md's Domain
+ note for the full reconciliation."}
