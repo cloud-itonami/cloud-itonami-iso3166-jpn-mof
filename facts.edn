@@ -1,0 +1,384 @@
+;; Regulatory source register for JPN-MOF — procurement (会計法 / 予算決算及び
+;; 会計令 / 全省庁統一資格), FEFTA foreign-investment screening, and customs.
+;;
+;; README.md says the operator's compliance claims must rest on the official
+;; MOF / Customs sources. Until this file existed there was no such list, so no
+;; claim in this repository could be traced to anything. This is that list.
+;;
+;; Shape is tx-data (a vector of entity maps), like every other EDN corpus in
+;; this workspace, so it loads with
+;;   (d/transact conn (edn/read-string (slurp "facts.edn")))
+;; :source/id is the join key. A law or page not in this table has NO
+;; spec-basis for this repository -- extend the table, never invent an id or a
+;; URL.
+;;
+;; VERIFIED BY `nbb scripts/verify-facts.cljs`, which re-fetches every entry.
+;; Each carries a :source/verify tag naming WHICH check establishes it.
+;;
+;;   :e-gov-law-id   Resolve the law id through the e-Gov law API and require
+;;                   the title and the law number to still match. HTTP status
+;;                   is never consulted here and must not be:
+;;                   laws.e-gov.go.jp is a single-page app that answers
+;;                   HTTP 200 for /law/<anything>, renders "not found"
+;;                   client-side, and therefore cannot tell a real citation
+;;                   from an invented one.
+;;
+;;   :page-identity  Fetch and require four things together: a 2xx, a final
+;;                   URL that is still the page asked for, the declared
+;;                   charset, and the <title> recorded below.
+;;
+;;   :page-text      All of :page-identity, plus every string in
+;;                   :page/must-contain present in the de-tagged body.
+;;
+;; THE HOST ASSUMPTIONS ARE MEASURED AT RUN TIME, NOT DATED IN A COMMENT.
+;; The :host-behaviour entities below say what each host does with a path that
+;; does not exist. The verifier fetches a nonexistent path on every host in the
+;; register and fails if the answer has changed. A dated note saying "measured
+;; to refuse correctly" degrades into a constant the moment it is written; a
+;; declaration the run re-measures cannot.
+;;
+;; NONE OF THE THREE HOSTS CITED HERE SERVED A BOT CHALLENGE WHEN MEASURED
+;; (2026-08-29). That is a measurement of one cold client on one day, not a
+;; property of the hosts: www.meti.go.jp, in the sibling METI register, serves
+;; an AWS WAF challenge as a 202 under repeated asking. The verifier here keeps
+;; the same challenge detector, so if a challenge ever stands in for a page the
+;; run REFUSES (exit 2) instead of reporting either a pass or a register error.
+;;
+;; Measured 2026-08-29, serial requests spaced seconds apart:
+;;   www.mof.go.jp       a nonexistent path answers 404 with a real
+;;                       "404 Not Found : 財務省" page at the requested URL.
+;;   www.customs.go.jp   a nonexistent path answers 404 with a 196-byte body
+;;                       titled "404 Not Found" at the requested URL. The FRONT
+;;                       page of this host is served as Shift_JIS with no
+;;                       charset in the Content-Type header -- the declaration
+;;                       is in a meta tag, so a verifier reading only the
+;;                       header would decode every Japanese string as mojibake
+;;                       and misreport the register. :page/charset pins it.
+;;   www.p-portal.go.jp  a nonexistent path answers 401 with a
+;;                       "調達ポータル システムエラー" page. The front URL
+;;                       redirects to the SPA entry
+;;                       /pps-web-biz/UZA01/OZA0101, which is where the title
+;;                       is served; the register declares that redirect
+;;                       explicitly rather than citing the SPA URL as if it
+;;                       were what was asked for.
+;;
+;; cais.go.jp (電子政府調達システム) was also probed on 2026-08-29 and could
+;; not be reached at all from this client (connection failure, both the front
+;; page and a nonexistent path). Nothing is cited on it, so there is no
+;; :host-behaviour entity for it -- one would only make every run refuse.
+;; :coverage/not-covered records it.
+;;
+;; :source/covers says why an entry is in a procurement / FEFTA-screening /
+;; customs register. Claims stop at the level actually checked -- law identity
+;; (title and law number from the e-Gov API), and for the cited pages the
+;; title, the URL, the charset and the strings read on 2026-08-29. No article
+;; text and no PDF is asserted, because none was read.
+
+[
+ ;; ── What each host does with a path that does not exist ────────────────────
+ ;; Re-measured on every run. A change here invalidates the check that rests
+ ;; on it, which is the point of writing it down as data.
+
+ {:source/id "host.www-mof-go-jp"
+  :source/kind :host-behaviour
+  :host/name "www.mof.go.jp"
+  :host/missing-path :refuses
+  :host/missing-status 404
+  :source/note "財務省 itself. A nonexistent path answers 404 with a real
+                404 Not Found : 財務省 page served AT THE REQUESTED URL, so
+                the title separates a real page from this soft 404 as well as
+                the status does."}
+
+ {:source/id "host.www-customs-go-jp"
+  :source/kind :host-behaviour
+  :host/name "www.customs.go.jp"
+  :host/missing-path :refuses
+  :host/missing-status 404
+  :source/note "財務省関税局 / Japan Customs. A nonexistent path answers 404
+                with a 196-byte body titled 404 Not Found -- small enough to
+                look like an edge error, but it is the host's own refusal.
+                The front page of this host is Shift_JIS declared only in a
+                meta tag; see the customs.home entry."}
+
+ {:source/id "host.www-p-portal-go-jp"
+  :source/kind :host-behaviour
+  :host/name "www.p-portal.go.jp"
+  :host/missing-path :refuses
+  :host/missing-status 401
+  :source/note "調達ポータル (the government procurement portal, run by
+                財務省's procurement side). A nonexistent path answers 401 --
+                not 403, not 404 -- with a 調達ポータル システムエラー page.
+                A checker written to expect 404 specifically would misreport a
+                host that answered perfectly clearly."}
+
+ ;; ── Statute: the agency itself ─────────────────────────────────────────────
+
+ {:source/id "law.mof-establishment"
+  :source/kind :statute
+  :source/title "財務省設置法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/411AC0000000095"
+  :source/verify :e-gov-law-id
+  :egov/law-id "411AC0000000095"
+  :egov/law-title "財務省設置法"
+  :egov/law-num "平成十一年法律第九十五号"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:agency-mandate}
+  :source/note "The Act that constitutes MOF. Resolved through the e-Gov API
+                by law number on 2026-08-29: 平成十一年法律第九十四号 turned
+                out to be 外務省設置法, and the id that looks like the natural
+                guess for 予算決算及び会計令 (322CO...) does not exist because
+                that instrument is a 勅令 -- which is exactly why the register
+                pins resolved ids and not plausible-looking ones. Article text
+                not read."}
+
+ ;; ── Statutes: procurement and accounting ───────────────────────────────────
+
+ {:source/id "law.accounts-act"
+  :source/kind :statute
+  :source/title "会計法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/322AC0000000035"
+  :source/verify :e-gov-law-id
+  :egov/law-id "322AC0000000035"
+  :egov/law-title "会計法"
+  :egov/law-num "昭和二十二年法律第三十五号"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:procurement-compliance}
+  :source/note "The Accounts Act, the statute behind the tender-method
+                classification this repository's governor works against.
+                Identity only -- the 競争入責任の原則, the 随意契約 limits and
+                the accounting-officer duties are article text and are NOT
+                asserted."}
+
+ {:source/id "law.budget-settlement-order"
+  :source/kind :statute
+  :source/title "予算決算及び会計令"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/322IO0000000165"
+  :source/verify :e-gov-law-id
+  :egov/law-id "322IO0000000165"
+  :egov/law-title "予算決算及び会計令"
+  :egov/law-num "昭和二十二年勅令第百六十五号"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:procurement-compliance :tender-method}
+  :source/note "予決令, the order that carries the tender-method catalogue
+                (一般競争入札 / 指名競争入札 / 随意契約). Two things worth
+                writing down: it is held by e-Gov as a 勅令 -- 昭和二十二年勅令
+                -- not a 政令, because it predates the current Constitution's
+                Cabinet Order system; and its id carries the type code IO, not
+                CO, for the same reason. The repository README's shorthand
+                \"Cabinet Order\" is a customary gloss, not the instrument's
+                class. Identity only; the method thresholds are article text."}
+
+ ;; ── Statutes: FEFTA foreign-investment screening ───────────────────────────
+
+ {:source/id "law.fefta"
+  :source/kind :statute
+  :source/title "外国為替及び外国貿易法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/324AC0000000228"
+  :source/verify :e-gov-law-id
+  :egov/law-id "324AC0000000228"
+  :egov/law-title "外国為替及び外国貿易法"
+  :egov/law-num "昭和二十四年法律第二百二十八号"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:foreign-investment-screening :export-control}
+  :source/note "外為法 / FEFTA, the statute the prior-notification screening
+                (対内直接投資等) half of this repository is about. Identity
+                only -- the designated and core sector tests, the
+                prior-notification vs post-report split and the penalties are
+                NOT asserted here because no article text was read. Note the
+                register title carries no abbreviation: 外為法 is a customary
+                short form and is not the title e-Gov holds."}
+
+ {:source/id "law.feaa-competent-minister-order"
+  :source/kind :statute
+  :source/title "外国為替及び外国貿易法における主務大臣を定める政令"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/355CO0000000259"
+  :source/verify :e-gov-law-id
+  :egov/law-id "355CO0000000259"
+  :egov/law-title "外国為替及び外国貿易法における主務大臣を定める政令"
+  :egov/law-num "昭和五十五年政令第二百五十九号"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:foreign-investment-screening :agency-mandate}
+  :source/note "The Order that allocates 主務大臣 under FEFTA. This is the
+                instrument that makes MOF -- together with METI and the other
+                competent ministries -- the addressee for a given filing,
+                which is why a leaf repository scoped to one ministry cites
+                it. Identity only: WHICH minister is competent for which
+                transaction is article text and is not asserted."}
+
+ {:source/id "law.foreign-exchange-order"
+  :source/kind :statute
+  :source/title "外国為替令"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/355CO0000000260"
+  :source/verify :e-gov-law-id
+  :egov/law-id "355CO0000000260"
+  :egov/law-title "外国為替令"
+  :egov/law-num "昭和五十五年政令第二百六十号"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:foreign-investment-screening :export-control}
+  :source/note "The Order carrying the technology and equipment lists beside
+                FEFTA's goods list. Identity only."}
+
+ ;; ── Statutes: customs and tariff ───────────────────────────────────────────
+
+ {:source/id "law.customs-act"
+  :source/kind :statute
+  :source/title "関税法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/329AC0000000061"
+  :source/verify :e-gov-law-id
+  :egov/law-id "329AC0000000061"
+  :egov/law-title "関税法"
+  :egov/law-num "昭和二十九年法律第六十一号"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:customs :import-declaration}
+  :source/note "The Customs Act -- the import-declaration procedure, the
+                assessment rules and the penalties side of the customs half
+                of this repository. Identity only; declaration-form obligations
+                are article text and are NOT asserted."}
+
+ {:source/id "law.customs-tariff-act"
+  :source/kind :statute
+  :source/title "関税定率法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/143AC0000000054"
+  :source/verify :e-gov-law-id
+  :egov/law-id "143AC0000000054"
+  :egov/law-title "関税定率法"
+  :egov/law-num "明治四十三年法律第五十四号"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:customs :tariff-classification}
+  :source/note "The Customs Tariff Act, carrying the tariff schedule. A
+                Meiji-43 statute still in force -- the age of a statute says
+                nothing about the age of the schedule it carries. Identity
+                only; no rate and no classification is asserted."}
+
+ {:source/id "law.customs-provisional-measures"
+  :source/kind :statute
+  :source/title "関税暫定措置法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/335AC0000000036"
+  :source/verify :e-gov-law-id
+  :egov/law-id "335AC0000000036"
+  :egov/law-title "関税暫定措置法"
+  :egov/law-num "昭和三十五年法律第三十六号"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:customs :tariff-classification}
+  :source/note "The provisional-measures Act that modifies the 定率法 schedule
+                year by year. An Act from 昭和35 that has outlived
+                the word. Identity only."}
+
+ ;; ── Pages: the ministry and the bureaus that answer ────────────────────────
+
+ {:source/id "mof.home"
+  :source/kind :agency-page
+  :source/title "財務省 front page"
+  :source/url "https://www.mof.go.jp/"
+  :source/verify :page-identity
+  :page/title "財務省"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:agency-mandate :procurement-access}
+  :source/note "The ministry front page. The nav text 財務省の政策 / 予算・
+                決算 / 関税制度 is the site's own division of the remit this
+                repository navigates. Checked as :page-identity, not
+                :page-text: the nav strings move when the site is redesigned,
+                and the page's value here is that it is the ministry's own
+                door, reachable and titled."}
+
+ {:source/id "mof.invest-japan"
+  :source/kind :agency-page
+  :source/title "財務省の対日直接投資総合案内窓口（INVEST JAPAN MOF）について"
+  :source/url "https://www.mof.go.jp/policy/international_policy/gaitame_kawase/invest_japan/index.htm"
+  :source/verify :page-text
+  :page/title "財務省の対日直接投資総合案内窓口（INVEST JAPAN MOF）について : 財務省"
+  :page/must-contain ["対日直接投資総合案内窓口"
+                      "対内直接投資審査制度について"
+                      "外為法関係・為替政策"]
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:foreign-investment-screening}
+  :source/note "MOF's own page for the 対日直接投資総合案内窓口 (INVEST JAPAN
+                MOF), reached from 国際政策 on 2026-08-29 -- the consultation
+                window beside the FEFTA prior-notification screening the
+                governor gates on. The strings pinned are the window's name,
+                the phrase that links the screening regime (対内直接投資審査
+                制度について) and the breadcrumb section it sits in (外為法
+                関係・為替政策). The contact details on the page -- the phone
+                number, the address -- were read but are NOT pinned here; they
+                rotate and this register pins identity, not directory data."}
+
+ {:source/id "customs.home"
+  :source/kind :agency-page
+  :source/title "税関 Japan Customs front page"
+  :source/url "https://www.customs.go.jp/"
+  :source/verify :page-identity
+  :page/charset "shift_jis"
+  :page/title "税関 Japan Customs"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:customs :import-declaration}
+  :source/note "The Customs and Tariff Bureau's front page. This is the one
+                entry in the register whose charset is NOT utf-8: the host
+                serves Shift_JIS with no charset on the Content-Type line, the
+                declaration sitting in a meta tag. :page/charset pins the
+                family, and the verifier re-decodes against it on every run --
+                if the host ever switches to UTF-8 the run FAILS with
+                charset-drift rather than silently re-decoding every Japanese
+                string on the page."}
+
+ {:source/id "portal.home"
+  :source/kind :agency-page
+  :source/title "調達ポータル front page"
+  :source/url "https://www.p-portal.go.jp/"
+  :source/verify :page-identity
+  :page/redirects-to "https://www.p-portal.go.jp/pps-web-biz/UZA01/OZA0101"
+  :page/title "調達ポータル"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:procurement-access :unified-qualification}
+  :source/note "調達ポータル, the portal where 全省庁統一資格 applications and
+                調達情報検索 live. The URL cited is the portal's door; the
+                host answers it by redirecting to the SPA entry
+                /pps-web-biz/UZA01/OZA0101, and the register declares that
+                target explicitly (:page/redirects-to) instead of citing the
+                SPA URL as though it were what was asked for -- the verifier
+                then FAILS if the redirect target ever moves. The portal's
+                全省庁統一資格について pages are behind the SPA and were not
+                read as static HTML; nothing about the qualification scheme
+                itself is asserted here."}
+
+ {:source/id "portal.spa"
+  :source/kind :agency-page
+  :source/title "調達ポータル SPA entry"
+  :source/url "https://www.p-portal.go.jp/pps-web-biz/UZA01/OZA0101"
+  :source/verify :page-identity
+  :page/title "調達ポータル"
+  :source/retrieved-at "2026-08-29"
+  :source/covers #{:procurement-access :unified-qualification}
+  :source/note "The SPA entry itself, fetched directly (2026-08-29) -- the URL
+                portal.home's :page/redirects-to points at, cited on its own
+                so the portal's redirect declaration and the reachable
+                application door can be checked independently. It is an
+                application shell: the title is the only text this register
+                pins, and nothing about 調達 content inside the SPA is
+                asserted."}
+
+ ;; ── What this register does not cover ──────────────────────────────────────
+
+ {:source/id "register.coverage"
+  :source/kind :coverage
+  :coverage/entries 14
+  :coverage/by-verify {:e-gov-law-id 9 :page-identity 4 :page-text 1}
+  :coverage/not-covered
+  ["www.cais.go.jp (電子政府調達システム) -- probed 2026-08-29, unreachable
+    from this client (connection failure on front and unknown path). Not
+    cited; the 統一資格 application flow therefore has NO spec-basis here
+    beyond the portal front page."
+   "Article text of every statute above -- identity (title + law number) only."
+   "全省庁統一資格の資格審査申請 pages inside the p-portal SPA -- behind a
+    JS application, not read as static HTML."
+   "MOF press releases, PDF circulars and 通達 -- none fetched."]
+  :source/note "Says what this register leaves out, so absence here is
+                :coverage/not-covered and not a claim that nothing exists."}]
