@@ -115,7 +115,7 @@
   filing tracks, this actor manages exactly ONE
   (`mofcompliance.registry/compliance-track`), so no per-track
   indirection is needed here either."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [mofcompliance.facts :as facts]
             [mofcompliance.registry :as registry]
             [mofcompliance.store :as store]))
